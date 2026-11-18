@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Product Matcher — find the same product across Flipkart, Croma, Myntra</title>
+<style>
+  :root {
+    --bg: #f7eef2;
+    --bg2: #ecdde5;
+    --fg: #3b1f2b;
+    --accent: #6b2a4a;
+    --accent-ink: #ffffff;
+    --card: #ffffff;
+    --muted: #8a6b78;
+    --border: #e0cfd8;
+    --ok: #237a3f;
+    --ok-bg: #e3f3e8;
+    --warn: #b46a1e;
+    --warn-bg: #fbeedc;
+    --none: #7d6572;
+    --none-bg: #eee0e6;
+    --err-bg: #fbe8e8;
+    --err: #9c1f1f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  .hero {
+    background: linear-gradient(180deg, var(--bg2) 0%, var(--bg) 100%);
+    padding: 56px 24px 24px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  .eyebrow {
+    display: inline-block;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    padding: 6px 14px;
+    border-radius: 999px;
+    margin-bottom: 20px;
+  }
+  h1 {
+    font-size: 40px;
+    line-height: 1.1;
+    margin: 0 0 14px;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+  }
+  h1 em { font-style: normal; color: var(--accent); }
+  .sub { color: var(--muted); font-size: 16px; margin: 0 0 28px; line-height: 1.5; }
+
+  form {
+    display: flex;
+    gap: 10px;
+    background: var(--card);
+    padding: 8px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    box-shadow: 0 10px 30px -18px rgba(107,42,74,0.3);
+  }
+  input {
+    flex: 1;
+    min-width: 0;
+    padding: 14px 14px;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    font-size: 15px;
+    color: var(--fg);
+    font-family: inherit;
+  }
+  button {
+    padding: 12px 22px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 15px;
+    font-family: inherit;
+    transition: transform 0.08s ease, opacity 0.1s ease;
+  }
+  button:hover:not(:disabled) { transform: translateY(-1px); }
+  button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+
+  .samples { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .samples .label { font-size: 12px; color: var(--muted); margin-right: 4px; align-self: center; }
+  .chip {
+    font-size: 12px;
+    background: transparent;
+    border: 1px dashed var(--border);
+    color: var(--fg);
+    padding: 6px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.1s ease, border-color 0.1s ease;
+  }
+  .chip:hover { background: var(--card); border-color: var(--accent); color: var(--accent); }
+
+  main { padding: 28px 24px 80px; }
+
+  .loading {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px 24px;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+  .spinner {
+    width: 18px; height: 18px;
+    border: 2.5px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-steps { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+  .loading-steps .step { color: var(--muted); }
+  .loading-steps .step.active { color: var(--fg); font-weight: 600; }
+  .loading-steps .step.done { color: var(--ok); }
+  .loading-steps .step.done::before { content: "✓ "; }
+
+  .product-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 24px;
+    margin-bottom: 20px;
+  }
+  .product-card .label {
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+    font-weight: 700;
+  }
+  .product-card .brand-model {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin-bottom: 4px;
+  }
+  .product-card .meta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .product-card .meta .tag {
+    background: var(--bg2);
+    padding: 3px 10px;
+    border-radius: 999px;
+    color: var(--fg);
+  }
+  .product-card .title {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 10px;
+    line-height: 1.5;
+  }
+
+  .results-header {
+    font-size: 12px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 24px 0 10px;
+    font-weight: 700;
+  }
+  .cards { display: grid; gap: 12px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 20px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 16px;
+    align-items: center;
+    transition: border-color 0.12s ease, transform 0.08s ease;
+  }
+  .card:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .card.in_stock { border-left: 4px solid var(--ok); }
+  .card.out_of_stock { border-left: 4px solid var(--warn); }
+  .card.not_listed { border-left: 4px solid var(--none); }
+
+  .platform-logo {
+    width: 48px; height: 48px;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800;
+    font-size: 18px;
+    color: #fff;
+    letter-spacing: -0.03em;
+  }
+  .platform-logo.Flipkart { background: #2874f0; }
+  .platform-logo.Croma    { background: #30c3cd; }
+  .platform-logo.Myntra   { background: linear-gradient(135deg, #ff3f6c, #fb5786); }
+
+  .card .body { min-width: 0; }
+  .card .platform {
+    font-weight: 700;
+    font-size: 16px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 999px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .badge.in_stock { background: var(--ok-bg); color: var(--ok); }
+  .badge.out_of_stock { background: var(--warn-bg); color: var(--warn); }
+  .badge.not_listed { background: var(--none-bg); color: var(--none); }
+  .badge .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+  }
+  .badge.in_stock .dot { background: var(--ok); }
+  .badge.out_of_stock .dot { background: var(--warn); }
+  .badge.not_listed .dot { background: var(--none); }
+
+  .card .matched {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 4px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .card .reasoning {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+    font-style: italic;
+    opacity: 0.8;
+  }
+  .card .cta {
+    text-decoration: none;
+    background: var(--bg2);
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 13px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    white-space: nowrap;
+    transition: background 0.1s ease;
+  }
+  .card .cta:hover { background: var(--accent); color: var(--accent-ink); }
+  .card .cta-disabled {
+    font-size: 12px;
+    color: var(--muted);
+    font-style: italic;
+    padding: 10px 14px;
+  }
+
+  .err {
+    background: var(--err-bg);
+    color: var(--err);
+    padding: 14px 18px;
+    border-radius: 12px;
+    border: 1px solid #f3c9c9;
+    font-size: 14px;
+  }
+
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 20px;
+    border-top: 1px solid var(--border);
+    background: var(--bg2);
+  }
+  footer code { background: rgba(255,255,255,0.6); padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  @media (max-width: 560px) {
+    .hero { padding: 32px 18px 20px; }
+    h1 { font-size: 30px; }
+    form { flex-direction: column; padding: 10px; }
+    button { width: 100%; }
+    .card { grid-template-columns: auto 1fr; }
+    .card .cta, .card .cta-disabled { grid-column: 1 / -1; text-align: center; }
+    main { padding: 20px 16px 60px; }
+  }
+</style>
+</head>
+<body>
+  <section class="hero">
+    <div class="wrap">
+      <div class="eyebrow">The Assignment</div>
+      <h1>Find the <em>same product</em> on other platforms</h1>
+      <p class="sub">Paste an Amazon India product link. We check Flipkart + Croma (electronics) or Flipkart + Myntra (apparel) and tell you what each one has.</p>
+      <form id="f">
+        <input id="url" type="url" placeholder="https://www.amazon.in/..." required autocomplete="url" />
+        <button id="btn" type="submit">Find</button>
+      </form>
+      <div class="samples">
+        <span class="label">Try:</span>
+        <button type="button" class="chip" data-url="https://www.amazon.in/dp/B0GL8GXNTS">Samsung S26 Ultra</button>
+        <button type="button" class="chip" data-url="https://www.amazon.in/dp/B0CS5Z3T4M">Samsung S24 Ultra</button>
+        <button type="button" class="chip" data-url="https://www.amazon.in/dp/B0983NTYZ5">Nike Court Vision</button>
+      </div>
+    </div>
+  </section>
+
+  <main>
+    <div class="wrap">
+      <div id="out"></div>
+    </div>
+  </main>
+
+  <footer>
+    Built with <code>curl_cffi</code> + Flask · No API keys · No LLM · Zero scraping cost
+  </footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const f = $("f"), urlInput = $("url"), btn = $("btn"), out = $("out");
+
+const STATUS_LABEL = {
+  in_stock: "In stock",
+  out_of_stock: "Out of stock",
+  not_listed: "Not listed",
+};
+
+const esc = (s) => String(s ?? "")
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+document.querySelectorAll(".chip").forEach(c => {
+  c.addEventListener("click", () => {
+    urlInput.value = c.dataset.url;
+    f.requestSubmit();
+  });
+});
+
+function renderLoading() {
+  out.innerHTML = `
+    <div class="loading">
+      <div class="spinner"></div>
+      <div class="loading-steps">
+        <div class="step active" id="s1">Reading the Amazon page…</div>
+        <div class="step" id="s2">Extracting brand, model &amp; specs…</div>
+        <div class="step" id="s3">Searching the other platforms in parallel…</div>
+      </div>
+    </div>
+  `;
+  // fake progressive activation so the user sees movement
+  setTimeout(() => { $("s1")?.classList.replace("active","done"); $("s2")?.classList.add("active"); }, 900);
+  setTimeout(() => { $("s2")?.classList.replace("active","done"); $("s3")?.classList.add("active"); }, 1800);
+}
+
+function renderResult(data) {
+  const p = data.product;
+  const results = data.results || [];
+  const cards = results.map(r => {
+    const statusCls = r.status;
+    const label = STATUS_LABEL[r.status] || r.status;
+    const matched = r.matched_title
+      ? `<div class="matched">${esc(r.matched_title)}</div>`
+      : "";
+    const reasoning = r.reasoning ? `<div class="reasoning">${esc(r.reasoning)}</div>` : "";
+    const cta = r.url
+      ? `<a class="cta" href="${esc(r.url)}" target="_blank" rel="noopener">Open ↗</a>`
+      : `<span class="cta-disabled">—</span>`;
+    return `
+      <div class="card ${statusCls}">
+        <div class="platform-logo ${esc(r.platform)}">${esc(r.platform.slice(0, 2))}</div>
+        <div class="body">
+          <div class="platform">
+            ${esc(r.platform)}
+            <span class="badge ${statusCls}"><span class="dot"></span>${label}</span>
+          </div>
+          ${matched}
+          ${reasoning}
+        </div>
+        ${cta}
+      </div>
+    `;
+  }).join("");
+
+  out.innerHTML = `
+    <div class="product-card">
+      <div class="label">Source product</div>
+      <div class="brand-model">${esc(p.brand)} ${esc(p.model)}</div>
+      <div class="meta">
+        <span class="tag">${esc(p.category)}</span>
+        ${p.key_attr ? `<span class="tag">${esc(p.key_attr)}</span>` : ""}
+      </div>
+      <div class="title">${esc(p.title)}</div>
+    </div>
+    <div class="results-header">Results on ${results.length} platform${results.length === 1 ? "" : "s"}</div>
+    <div class="cards">${cards}</div>
+  `;
+}
+
+f.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const url = urlInput.value.trim();
+  if (!url) return;
+  btn.disabled = true;
+  btn.textContent = "Searching…";
+  renderLoading();
+
+  try {
+    const r = await fetch("/match", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ url }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      out.innerHTML = `<div class="err">${esc(data.error || "Something went wrong")}</div>`;
+      return;
+    }
+    renderResult(data);
+  } catch (err) {
+    out.innerHTML = `<div class="err">${esc(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Find";
+  }
+});
+</script>
+</body>
+</html>
