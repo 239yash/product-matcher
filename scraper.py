@@ -231,7 +231,8 @@ def _clean_model_name(title: str, brand: str, category: str) -> str:
             # Skip ALL-CAPS tokens 4+ chars that look like adidas-style colour codes
             # (TENABL, TENABLWHT, etc.) — distinct from brand model names which are
             # normally mixed-case or standalone alphanumeric.
-            if len(tok) >= 4 and tok.isupper() and tok.isalpha():
+            # drop adidas-style ALL-CAPS colour codes (TENABL, TENABLWHT) — 5+ letters only
+            if len(tok) >= 5 and tok.isupper() and tok.isalpha():
                 continue
             keep.append(tok)
         return " ".join(keep[:4])
@@ -515,10 +516,12 @@ def matches(product: dict, candidate_title: str, candidate_body: str = "") -> bo
             return False
     if alpha:
         hits = sum(1 for w in alpha if _norm(w) in _norm(candidate_title))
-        # Require ~half; a single alpha token is optional so that series
-        # words like "Galaxy" being dropped by retailers (Samsung M36 vs
-        # Samsung Galaxy M36) don't cause false negatives.
-        required = len(alpha) // 2
+        # Fashion needs EVERY alpha token (different model lines share digits).
+        # Phones/TVs can drop one series word (e.g. "Galaxy" on Flipkart listings).
+        if cat in ("sneaker", "apparel"):
+            required = len(alpha)
+        else:
+            required = len(alpha) // 2
         if hits < required:
             return False
 
@@ -593,7 +596,7 @@ def _queries_for(product: dict) -> list[str]:
 
 def find_on_flipkart(product: dict) -> dict:
     tried_links: set[str] = set()
-    for query in _queries_for(product)[:2]:
+    for query in _queries_for(product)[:3]:
         url = f"https://www.flipkart.com/search?q={urllib.parse.quote_plus(query)}"
         r = _fetch(url)
         if not r:
@@ -602,7 +605,7 @@ def find_on_flipkart(product: dict) -> dict:
         links = [l.replace('&amp;', '&') for l in dict.fromkeys(links)]
         if not links:
             continue
-        for link in links[:10]:
+        for link in links[:15]:
             page_url = "https://www.flipkart.com" + link
             if page_url in tried_links:
                 continue

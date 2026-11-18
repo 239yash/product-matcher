@@ -55,11 +55,12 @@ def find_on_croma(product: dict) -> dict:
         if not data:
             continue
         products = data.get("products") or []
-        for p in products[:15]:
+        for p in products[:20]:
             name = p.get("name") or ""
             brand = p.get("manufacturer") or ""
             full = f"{brand} {name}"
-            if not matches(product, full):
+            body = (p.get("summary", "") or "") + " " + (p.get("quickViewDesc", "") or "")
+            if not matches(product, full, body):
                 continue
             stock_flag = p.get("stockFlag") or []
             price_type = ((p.get("price") or {}).get("priceType") or "").upper()
