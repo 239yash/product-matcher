@@ -669,16 +669,47 @@ def find_on_flipkart(product: dict, use_llm: bool = False) -> dict:
     tried_links: set[str] = set()
     seen: list[dict] = []  # for LLM fallback (only used when use_llm)
 
+    # Priority: DDG site search when we have a distinctive model code.
+    # Massively helps TVs where Flipkart's internal search ranks the exact
+    # SKU below generic variants (Sony K-55S25BM2, LG 43NU870BPLA, etc.).
+    code = product.get("model_code", "")
+    brand = product.get("brand", "")
+    if code and brand and product.get("category") == "television":
+        for link in _ddg_site_search("flipkart.com", f"{brand} {code}")[:3]:
+            if link in tried_links:
+                continue
+            tried_links.add(link)
+            r2 = _fetch(link)
+            if not r2:
+                continue
+            title_m = re.search(r'<title>([^<]+)</title>', r2.text)
+            page_title = _unescape(title_m.group(1)) if title_m else ""
+            body_snippet = r2.text[:80000]
+            if matches(product, page_title, body_snippet):
+                return {
+                    "platform": "Flipkart",
+                    "status": detect_stock(r2.text),
+                    "url": link,
+                    "matched_title": page_title[:180],
+                    "reasoning": "matched via DDG site search (by model code)",
+                }
+
     for query in _queries_for(product)[:3]:
-        url = f"https://www.flipkart.com/search?q={urllib.parse.quote_plus(query)}"
-        r = _fetch(url)
-        if not r:
+        all_links: list[str] = []
+        # Fetch pages 1 and 2 so deeper-ranked variants surface
+        for page in (1, 2):
+            url = f"https://www.flipkart.com/search?q={urllib.parse.quote_plus(query)}&page={page}"
+            r = _fetch(url)
+            if not r:
+                continue
+            page_links = re.findall(r'href="(/[^"#?]+/p/[^"&]+)(?:&amp;|\?|")', r.text)
+            page_links = [l.replace('&amp;', '&') for l in dict.fromkeys(page_links)]
+            for l in page_links:
+                if l not in all_links:
+                    all_links.append(l)
+        if not all_links:
             continue
-        links = re.findall(r'href="(/[^"#?]+/p/[^"&]+)(?:&amp;|\?|")', r.text)
-        links = [l.replace('&amp;', '&') for l in dict.fromkeys(links)]
-        if not links:
-            continue
-        for link in links[:25]:
+        for link in all_links[:25]:
             page_url = "https://www.flipkart.com" + link
             if page_url in tried_links:
                 continue
