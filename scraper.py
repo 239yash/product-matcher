@@ -567,6 +567,11 @@ def matches(product: dict, candidate_title: str, candidate_body: str = "", stric
     alpha = _alpha_tokens(model_tokens)
 
     for w in digit:
+        # SKU-like pure-digit tokens (Levi's "025", Puma "687093") rarely appear
+        # in retailer product names for fashion — brand filter already enforces
+        # correctness. Only enforce for phones/TVs where variant numbers matter.
+        if cat in ("sneaker", "apparel") and len(w) >= 3 and w.isdigit():
+            continue
         if not re.search(rf'\b{re.escape(w.lower())}\b', title_low):
             return False
 
@@ -767,16 +772,98 @@ _MYNTRA_PATH_SAFE = re.compile(r"[^a-zA-Z0-9\- ]")
 
 
 def _myntra_slug(query: str) -> str:
-    # HTML-decode (already done upstream), strip unsafe chars, collapse spaces.
     q = _unescape(query)
     q = _MYNTRA_PATH_SAFE.sub(' ', q)
     q = re.sub(r'\s+', ' ', q).strip()
     return urllib.parse.quote(q.replace(' ', '-'))
 
 
+# Myntra's internal search API exposes ~500k+ products via category routes.
+# We call it with the brand filter to get much better precision than slug search.
+MYNTRA_CATS = {
+    "sneaker": ["casual-shoes", "sports-shoes", "sneakers"],
+    "apparel": ["football-jerseys", "jerseys", "mens-tshirts", "polo-tshirts",
+                "mens-casual-shirts", "mens-formal-shirts", "womens-tshirts"],
+}
+
+# Normalise brand to the form Myntra uses in its facet filter.
+_MYNTRA_BRAND_NORM = {
+    "levi's": "Levis", "levis": "Levis",
+    "adidas": "ADIDAS", "nike": "Nike", "puma": "Puma",
+    "converse": "Converse", "skechers": "Skechers",
+    "reebok": "Reebok", "new balance": "New Balance", "asics": "ASICS",
+}
+
+
+def _myntra_session():
+    """Open a session with Myntra's homepage cookies — needed for gateway API."""
+    sess = requests.Session()
+    try:
+        sess.get("https://www.myntra.com/", impersonate=IMPERSONATE, timeout=TIMEOUT)
+    except Exception:
+        pass
+    return sess
+
+
+def _myntra_api_search(sess, category: str, query: str, brand: str, rows: int = 30) -> list[dict]:
+    """Return products[] from Myntra's `/gateway/v2/search/<category>` endpoint."""
+    brand_norm = _MYNTRA_BRAND_NORM.get(brand.lower(), brand)
+    params = f"rows={rows}&q={urllib.parse.quote(query)}&f=Brand%3A{urllib.parse.quote(brand_norm)}"
+    url = f"https://www.myntra.com/gateway/v2/search/{category}?{params}"
+    try:
+        r = sess.get(url, impersonate=IMPERSONATE, timeout=TIMEOUT,
+                     headers={"Accept": "application/json", "Referer": "https://www.myntra.com/"})
+    except Exception:
+        return []
+    if r.status_code != 200 or not r.text.startswith("{"):
+        return []
+    try:
+        return r.json().get("products", []) or []
+    except Exception:
+        return []
+
+
 def find_on_myntra(product: dict, use_llm: bool = False) -> dict:
     seen: list[dict] = []
     target_brand = _norm(product.get("brand", ""))
+
+    # ---- Priority: Myntra's gateway search API (needs session cookies) ----
+    src_brand = product.get("brand", "")
+    categories = MYNTRA_CATS.get(product.get("category", ""), [])
+    if src_brand and categories:
+        sess = _myntra_session()
+        for cat in categories:
+            for query in _queries_for(product)[:2]:
+                prods = _myntra_api_search(sess, cat, query, src_brand, rows=30)
+                for p in prods[:15]:
+                    name = p.get("productName") or ""
+                    pbrand = p.get("brand") or ""
+                    colour = p.get("primaryColour") or ""
+                    variants = p.get("colourVariants") or []
+                    variant_hex = " ".join(v.get("baseColourHex", "") for v in variants if isinstance(v, dict))
+                    sub_cat = (p.get("subCategory", {}) or {}).get("typeName", "")
+                    full = f"{pbrand} {name} {colour}"
+                    body = f"{colour} {variant_hex} {sub_cat}"
+                    # Enforce colour when Myntra's primaryColour is available
+                    # (prevents Levi's Black matching Brown/Green variants).
+                    use_strict_colour = bool(colour)
+                    if matches(product, full, body, strict_colour=use_strict_colour):
+                        slug_url = p.get("landingPageUrl", "")
+                        page_url = f"https://www.myntra.com/{slug_url}" if slug_url else ""
+                        status = "in_stock"
+                        if page_url:
+                            r2 = _fetch(page_url)
+                            if r2:
+                                status = detect_stock(r2.text)
+                        return {
+                            "platform": "Myntra",
+                            "status": status,
+                            "url": page_url,
+                            "matched_title": name[:180],
+                            "reasoning": f"matched via gateway API /{cat}",
+                        }
+
+    # ---- Fallback: slug search ----
     for query in _queries_for(product):
         slug = _myntra_slug(query)
         if not slug:
