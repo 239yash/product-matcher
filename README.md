@@ -40,6 +40,11 @@ Backend and frontend live in the same folder and are served by the same Flask pr
 
 - Python 3.10 or later
 - macOS, Linux, or Windows (tested on macOS)
+- **Optional:** a free Gemini API key for LLM-verified fallback on the hard cases. Grab one at https://aistudio.google.com/apikey and export it:
+  ```bash
+  export GEMINI_API_KEY=your_key_here
+  ```
+  Without the key, the matcher runs pure regex / structured extraction only.
 
 ## Run
 

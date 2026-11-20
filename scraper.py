@@ -460,68 +460,119 @@ def _alpha_tokens(tokens: list[str]) -> list[str]:
     return [t for t in tokens if not any(c.isdigit() for c in t)]
 
 
-def matches(product: dict, candidate_title: str, candidate_body: str = "") -> bool:
-    """Return True if the candidate plausibly refers to the same product.
+def matches(product: dict, candidate_title: str, candidate_body: str = "", strict_colour: bool = True) -> bool:
+    """Strict same-variant match.
 
-    `candidate_body` is an optional HTML or text blob — used to find model codes
-    hidden in product descriptions (Flipkart) that aren't in the <title> tag.
+    Checks (per category):
+      - brand (word-boundary)
+      - model code anywhere in title/body => instant yes
+      - for TVs: code required
+      - for phones: RAM, storage, colour, 4G/5G all must match
+      - for shoes/apparel: gender, top-type (low/high-top), colour must match
+      - model tokens word-boundary matched in the title (not substring,
+        so Y31 does NOT match Y31t)
     """
     cand_full = candidate_title + " " + candidate_body
-    cand_norm = _norm(cand_full)
-    cand_lower = cand_full.lower()
+    cand_low = cand_full.lower()
+    title_low = candidate_title.lower()
+    src_title_low = product.get("title", "").lower()
 
-    brand = _norm(product.get("brand", ""))
-    if brand and brand not in _norm(candidate_title):
+    brand = (product.get("brand", "") or "").lower()
+    if brand and not re.search(rf'\b{re.escape(brand)}\b', title_low):
         return False
 
     code = product.get("model_code", "")
     cat = product.get("category", "")
 
-    # Model code is a strong positive signal.
-    code_hit = bool(code) and _norm(code) in cand_norm
-    if code_hit:
+    # Model code is a strong positive signal (anywhere in cand).
+    if code and _norm(code) in _norm(cand_full):
         return True
 
-    # For TVs, if a model code is known AND wasn't found, reject.
-    # (Sneakers/apparel can legitimately miss the code from listings.)
     if cat == "television" and code:
+        # Code known but missing — reject.
         return False
 
-    if cat == "smartphone":
-        ram = _norm(product.get("ram", ""))
-        storage = _norm(product.get("storage", ""))
-        if ram and ram not in cand_norm:
-            return False
-        if storage and storage not in cand_norm:
-            return False
-    elif cat == "television":
+    if cat == "television":
         ss = product.get("screen_size", "")
-        if ss and not re.search(rf'\b{ss}\b', candidate_title):
+        if ss and not re.search(rf'\b{ss}\b', title_low):
             return False
-    elif cat in ("sneaker", "apparel"):
-        colour = product.get("colour", "")
-        if colour:
-            colour_tokens = [w.lower() for w in _tokens(colour)]
-            base_hits = [w for w in colour_tokens if w in COLOUR_WORDS]
-            if base_hits and not any(w in cand_lower for w in base_hits):
+
+    if cat == "smartphone":
+        ram = (product.get("ram", "") or "").lower()
+        storage = (product.get("storage", "") or "").lower()
+        if ram:
+            if _norm(ram) not in _norm(cand_full):
+                return False
+        if storage:
+            if _norm(storage) not in _norm(cand_full):
+                return False
+        # 4G / 5G distinction
+        src_generation = None
+        if re.search(r'\b5g\b', src_title_low):
+            src_generation = "5g"
+        elif re.search(r'\b4g\b', src_title_low):
+            src_generation = "4g"
+        if src_generation:
+            if not re.search(rf'\b{src_generation}\b', cand_low):
+                return False
+            opposite = "4g" if src_generation == "5g" else "5g"
+            # If candidate TITLE explicitly says the opposite (not just body boilerplate), reject.
+            if re.search(rf'\b{opposite}\b', title_low) and not re.search(rf'\b{src_generation}\b', title_low):
+                return False
+        # Colour (always checked for phones when source has one)
+        colour = (product.get("colour", "") or "").lower()
+        source_colours = [w for w in COLOUR_WORDS
+                          if re.search(rf'\b{w}\b', src_title_low + " " + colour)]
+        if source_colours and not any(re.search(rf'\b{w}\b', cand_low) for w in source_colours):
+            return False
+
+    if cat in ("sneaker", "apparel"):
+        # Gender check: only enforce when source names one unambiguously.
+        src_has_women = bool(re.search(r"\bwomens?\b|\bwomen's\b", src_title_low))
+        src_has_men = bool(re.search(r"\bmens?\b|\bmen's\b", src_title_low)) and not src_has_women
+        if src_has_women:
+            # Candidate must say women, or be unisex (no men's claim)
+            if re.search(r"\bmens?\b|\bmen's\b", title_low) and not re.search(r"\bwomens?\b|\bwomen's\b", title_low):
+                return False
+        elif src_has_men:
+            if re.search(r"\bwomens?\b|\bwomen's\b", title_low):
                 return False
 
-    # Model name tokens
+        # Top-type check for sneakers (high-top vs low-top vs mid-top)
+        if cat == "sneaker":
+            def _top(text: str) -> str:
+                if re.search(r'\bhigh[-\s]?top\b', text): return "high"
+                if re.search(r'\blow[-\s]?top\b', text): return "low"
+                if re.search(r'\bmid[-\s]?top\b', text): return "mid"
+                return ""
+            src_top = _top(src_title_low)
+            if src_top:
+                cand_top = _top(cand_low)
+                if cand_top and cand_top != src_top:
+                    return False
+
+        # Colour check (strict mode — used by Flipkart & similar)
+        if strict_colour:
+            colour = (product.get("colour", "") or "").lower()
+            source_colours = [w for w in COLOUR_WORDS
+                              if re.search(rf'\b{w}\b', src_title_low + " " + colour)]
+            if source_colours and not any(re.search(rf'\b{w}\b', cand_low) for w in source_colours):
+                return False
+
+    # Model name tokens — word-boundary match on the TITLE only (prevents
+    # Y31 from substring-matching "Y31t", and "Breaknet" from matching bodies
+    # that mention the word in unrelated context).
     model_tokens = _model_tokens(product)
     digit = _digit_tokens(model_tokens)
     alpha = _alpha_tokens(model_tokens)
 
     for w in digit:
-        if _norm(w) not in _norm(candidate_title):
+        if not re.search(rf'\b{re.escape(w.lower())}\b', title_low):
             return False
+
     if alpha:
-        hits = sum(1 for w in alpha if _norm(w) in _norm(candidate_title))
-        # Fashion needs EVERY alpha token (different model lines share digits).
-        # Phones/TVs can drop one series word (e.g. "Galaxy" on Flipkart listings).
-        if cat in ("sneaker", "apparel"):
-            required = len(alpha)
-        else:
-            required = len(alpha) // 2
+        hits = sum(1 for w in alpha if re.search(rf'\b{re.escape(w.lower())}\b', title_low))
+        required = len(alpha) if cat in ("sneaker", "apparel") else max(1, len(alpha) // 2)
         if hits < required:
             return False
 
@@ -566,7 +617,6 @@ def _queries_for(product: dict) -> list[str]:
         queries.append(f"{brand} {ss} inch {model}".strip())
         queries.append(f"{brand} {model}".strip())
     elif cat in ("sneaker", "apparel"):
-        # Infer a category word from the title so queries pick up the right aisle
         title_low = product.get("title", "").lower()
         if cat == "sneaker":
             cat_hint = "shoes"
@@ -580,6 +630,12 @@ def _queries_for(product: dict) -> list[str]:
         queries.append(f"{brand} {model} {cat_hint}".strip())
         queries.append(f"{brand} {model} {colour}".strip())
         queries.append(f"{brand} {model}".strip())
+        # Team / sports jerseys: team name alone often ranks better than "brand+team"
+        for team_kw in ("manchester united", "real madrid", "barcelona", "chelsea", "arsenal",
+                        "india cricket", "football"):
+            if team_kw in title_low:
+                queries.append(f"{team_kw} jersey".strip())
+                break
     else:
         queries.append(f"{brand} {model}".strip())
 
@@ -594,8 +650,25 @@ def _queries_for(product: dict) -> list[str]:
 
 # --- Flipkart -------------------------------------------------------
 
-def find_on_flipkart(product: dict) -> dict:
+def _ddg_site_search(site: str, query: str) -> list[str]:
+    """Return URLs on `site` found via DuckDuckGo site-restricted search."""
+    q = urllib.parse.quote(f"site:{site} {query}")
+    r = _fetch(f"https://html.duckduckgo.com/html/?q={q}")
+    if not r:
+        return []
+    hits = re.findall(r'uddg=([^&"]+)', r.text)
+    urls = []
+    for h in hits:
+        u = urllib.parse.unquote(h)
+        if site in u and u not in urls:
+            urls.append(u)
+    return urls
+
+
+def find_on_flipkart(product: dict, use_llm: bool = False) -> dict:
     tried_links: set[str] = set()
+    seen: list[dict] = []  # for LLM fallback (only used when use_llm)
+
     for query in _queries_for(product)[:3]:
         url = f"https://www.flipkart.com/search?q={urllib.parse.quote_plus(query)}"
         r = _fetch(url)
@@ -605,7 +678,7 @@ def find_on_flipkart(product: dict) -> dict:
         links = [l.replace('&amp;', '&') for l in dict.fromkeys(links)]
         if not links:
             continue
-        for link in links[:15]:
+        for link in links[:25]:
             page_url = "https://www.flipkart.com" + link
             if page_url in tried_links:
                 continue
@@ -615,7 +688,6 @@ def find_on_flipkart(product: dict) -> dict:
                 continue
             title_m = re.search(r'<title>([^<]+)</title>', r2.text)
             page_title = _unescape(title_m.group(1)) if title_m else ""
-            # Pass a body snippet so a model-code hiding in the description still hits.
             body_snippet = r2.text[:80000]
             if matches(product, page_title, body_snippet):
                 return {
@@ -625,7 +697,37 @@ def find_on_flipkart(product: dict) -> dict:
                     "matched_title": page_title[:180],
                     "reasoning": f"matched via query: {query}",
                 }
+            # Collect brand-matching candidates for optional LLM fallback.
+            # Do NOT break early — strict matching must still scan all 15 links.
+            if use_llm and _norm(product.get("brand", "")) in _norm(page_title) and len(seen) < 8:
+                seen.append({"title": page_title, "snippet": "", "url": page_url, "body": r2.text})
+    if use_llm:
+        hit = _llm_fallback("Flipkart", product, seen)
+        if hit:
+            return hit
     return _not_listed("Flipkart", "no candidate matched any query")
+
+
+def _llm_fallback(platform: str, product: dict, seen: list[dict]) -> Optional[dict]:
+    if not seen:
+        return None
+    try:
+        import llm_verify
+    except Exception:
+        return None
+    candidates = [{"title": s["title"], "snippet": ""} for s in seen]
+    idx = llm_verify.verify_match(product, candidates, platform)
+    if idx is None:
+        return None
+    chosen = seen[idx]
+    body = chosen.get("body", "")
+    return {
+        "platform": platform,
+        "status": detect_stock(body) if body else "in_stock",
+        "url": chosen.get("url", ""),
+        "matched_title": chosen["title"][:180],
+        "reasoning": "LLM-verified match",
+    }
 
 
 # --- Myntra ---------------------------------------------------------
@@ -641,7 +743,9 @@ def _myntra_slug(query: str) -> str:
     return urllib.parse.quote(q.replace(' ', '-'))
 
 
-def find_on_myntra(product: dict) -> dict:
+def find_on_myntra(product: dict, use_llm: bool = False) -> dict:
+    seen: list[dict] = []
+    target_brand = _norm(product.get("brand", ""))
     for query in _queries_for(product):
         slug = _myntra_slug(query)
         if not slug:
@@ -663,23 +767,42 @@ def find_on_myntra(product: dict) -> dict:
         for p in products[:15]:
             name = p.get("productName") or ""
             brand = p.get("brand") or ""
-            full = f"{brand} {name}"
-            if not matches(product, full):
-                continue
-            slug_url = p.get("landingPageUrl", "")
-            page_url = f"https://www.myntra.com/{slug_url}" if slug_url else ""
-            status = "in_stock"
-            if page_url:
-                r2 = _fetch(page_url)
-                if r2:
-                    status = detect_stock(r2.text)
-            return {
-                "platform": "Myntra",
-                "status": status,
-                "url": page_url,
-                "matched_title": name[:180],
-                "reasoning": f"matched via query: {query}",
-            }
+            colour = p.get("primaryColour") or ""
+            # Pull all colour variant names from the colourVariants list too
+            variants = p.get("colourVariants") or []
+            variant_hex = " ".join(v.get("baseColourHex", "") for v in variants if isinstance(v, dict))
+            sub_cat = (p.get("subCategory", {}) or {}).get("typeName", "")
+            full = f"{brand} {name} {colour}"
+            body = f"{colour} {variant_hex} {sub_cat}"
+            # Myntra lists one URL per product covering every colour variant;
+            # skip strict colour check so we don't drop valid matches.
+            if matches(product, full, body, strict_colour=False):
+                slug_url = p.get("landingPageUrl", "")
+                page_url = f"https://www.myntra.com/{slug_url}" if slug_url else ""
+                status = "in_stock"
+                if page_url:
+                    r2 = _fetch(page_url)
+                    if r2:
+                        status = detect_stock(r2.text)
+                return {
+                    "platform": "Myntra",
+                    "status": status,
+                    "url": page_url,
+                    "matched_title": name[:180],
+                    "reasoning": f"matched via query: {query}",
+                }
+            if use_llm and target_brand and target_brand in _norm(full) and len(seen) < 8:
+                slug_url = p.get("landingPageUrl", "")
+                seen.append({
+                    "title": full,
+                    "snippet": "",
+                    "url": f"https://www.myntra.com/{slug_url}" if slug_url else "",
+                    "body": "",
+                })
+    if use_llm:
+        hit = _llm_fallback("Myntra", product, seen)
+        if hit:
+            return hit
     return _not_listed("Myntra", "no candidate matched any query")
 
 

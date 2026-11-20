@@ -95,6 +95,10 @@
   button:hover:not(:disabled) { transform: translateY(-1px); }
   button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 
+  .llm-toggle { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--muted); cursor: pointer; }
+  .llm-toggle input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+  .llm-toggle code { background: #efdfe6; padding: 1px 6px; border-radius: 4px; font-size: 11px; }
+  .llm-toggle em { font-style: normal; opacity: 0.8; font-size: 12px; }
   .samples { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
   .samples .label { font-size: 12px; color: var(--muted); margin-right: 4px; align-self: center; }
   .chip {
@@ -314,6 +318,10 @@
         <input id="url" type="url" placeholder="https://www.amazon.in/..." required autocomplete="url" />
         <button id="btn" type="submit">Find</button>
       </form>
+      <label class="llm-toggle">
+        <input type="checkbox" id="use_llm" />
+        <span>Use LLM fallback for hard cases <em>(needs <code>GEMINI_API_KEY</code>)</em></span>
+      </label>
       <div class="samples">
         <span class="label">Try:</span>
         <button type="button" class="chip" data-url="https://www.amazon.in/dp/B0GL8GXNTS">Samsung S26 Ultra</button>
@@ -423,10 +431,11 @@ f.addEventListener("submit", async (e) => {
   renderLoading();
 
   try {
+    const use_llm = document.getElementById("use_llm").checked;
     const r = await fetch("/match", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, use_llm }),
     });
     const data = await r.json();
     if (!r.ok) {

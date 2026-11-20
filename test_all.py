@@ -1,12 +1,17 @@
 """Run the 20 reviewer URLs through the pipeline and show a compact report.
 
-Usage: python test_all.py
+Usage:
+  python test_all.py           # strict matcher only
+  python test_all.py --llm     # with LLM fallback (needs GEMINI_API_KEY)
 """
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import scraper
 import croma
+
+USE_LLM = "--llm" in sys.argv
 
 # (category, Amazon ASIN, expected label, (flipkart_expect, other_expect))
 # Expectations: "found" means the product exists on that platform;
@@ -68,7 +73,7 @@ def run_one(cat: str, asin: str) -> dict:
         return {"error": f"extract failed: {e}", "asin": asin}
     plats = CAT_PLATFORMS.get(product["category"], ("flipkart", "croma"))
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda p: FINDERS[p](product), plats))
+        results = list(pool.map(lambda p: FINDERS[p](product, use_llm=USE_LLM), plats))
     return {
         "asin": asin,
         "product": product,
@@ -95,6 +100,7 @@ def _verdict(expect: str, status: str) -> str:
 
 
 def main():
+    print(f"mode: {'LLM-enhanced' if USE_LLM else 'strict regex only'}")
     print(f"{'ASIN':<13} {'label':<40} {'cat':<10} {'plat A':<25} {'plat B':<25} {'t(s)':>6}")
     print("-" * 125)
     right = 0

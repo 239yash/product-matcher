@@ -30,6 +30,7 @@ def index():
 def match():
     data = request.get_json() or {}
     url = data.get("url", "").strip()
+    use_llm = bool(data.get("use_llm", False))
     if not url or "amazon." not in url:
         return jsonify({"error": "Provide a valid Amazon product URL"}), 400
 
@@ -44,9 +45,9 @@ def match():
 
     platforms = CATEGORY_RULES[category]["platforms"]
     with ThreadPoolExecutor(max_workers=len(platforms)) as pool:
-        results = list(pool.map(lambda p: FINDERS[p](product), platforms))
+        results = list(pool.map(lambda p: FINDERS[p](product, use_llm=use_llm), platforms))
 
-    return jsonify({"product": product, "results": results})
+    return jsonify({"product": product, "results": results, "use_llm": use_llm})
 
 
 if __name__ == "__main__":

@@ -49,7 +49,10 @@ def _call(query: str) -> Optional[dict]:
         return None
 
 
-def find_on_croma(product: dict) -> dict:
+def find_on_croma(product: dict, use_llm: bool = False) -> dict:
+    from scraper import _norm
+    seen: list[dict] = []
+    target_brand = _norm(product.get("brand", ""))
     for query in _queries_for(product):
         data = _call(query)
         if not data:
@@ -60,20 +63,48 @@ def find_on_croma(product: dict) -> dict:
             brand = p.get("manufacturer") or ""
             full = f"{brand} {name}"
             body = (p.get("summary", "") or "") + " " + (p.get("quickViewDesc", "") or "")
-            if not matches(product, full, body):
-                continue
-            stock_flag = p.get("stockFlag") or []
-            price_type = ((p.get("price") or {}).get("priceType") or "").upper()
-            in_stock = bool(stock_flag) and price_type == "BUY"
-            status = "in_stock" if in_stock else "out_of_stock"
-            slug = p.get("url", "")
-            return {
-                "platform": "Croma",
-                "status": status,
-                "url": f"https://www.croma.com{slug}" if slug else "",
-                "matched_title": name[:180],
-                "reasoning": f"API match via query: {query} ({len(stock_flag)} stores)",
-            }
+            if matches(product, full, body):
+                stock_flag = p.get("stockFlag") or []
+                price_type = ((p.get("price") or {}).get("priceType") or "").upper()
+                in_stock = bool(stock_flag) and price_type == "BUY"
+                status = "in_stock" if in_stock else "out_of_stock"
+                slug = p.get("url", "")
+                return {
+                    "platform": "Croma",
+                    "status": status,
+                    "url": f"https://www.croma.com{slug}" if slug else "",
+                    "matched_title": name[:180],
+                    "reasoning": f"API match via query: {query} ({len(stock_flag)} stores)",
+                }
+            if use_llm and target_brand and target_brand in _norm(full) and len(seen) < 8:
+                stock_flag = p.get("stockFlag") or []
+                price_type = ((p.get("price") or {}).get("priceType") or "").upper()
+                slug = p.get("url", "")
+                seen.append({
+                    "title": full,
+                    "snippet": (p.get("summary") or "")[:200],
+                    "url": f"https://www.croma.com{slug}" if slug else "",
+                    "_stock": "in_stock" if (bool(stock_flag) and price_type == "BUY") else "out_of_stock",
+                })
+
+    # LLM fallback
+    if use_llm and seen:
+        try:
+            import llm_verify
+            candidates = [{"title": s["title"], "snippet": s["snippet"]} for s in seen]
+            idx = llm_verify.verify_match(product, candidates, "Croma")
+            if idx is not None:
+                c = seen[idx]
+                return {
+                    "platform": "Croma",
+                    "status": c["_stock"],
+                    "url": c["url"],
+                    "matched_title": c["title"][:180],
+                    "reasoning": "LLM-verified match",
+                }
+        except Exception:
+            pass
+
     return {
         "platform": "Croma",
         "status": "not_listed",
